@@ -23,6 +23,7 @@ import android.view.View;
 import android.view.WindowInsets;
 
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.widget.ViewClippingUtil;
 import com.android.systemui.Dependency;
 import com.android.systemui.R;
 import com.android.systemui.statusbar.CrossFadeHelper;
@@ -48,6 +49,7 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
     private final NotificationStackScrollLayout mStackScroller;
     private final HeadsUpStatusBarView mHeadsUpStatusBarView;
     private final ClockController mClockController;
+    private final View mOperatorNameView;
     private final DarkIconDispatcher mDarkIconDispatcher;
     private final NotificationPanelView mPanelView;
     private final Consumer<ExpandableNotificationRow>
@@ -65,6 +67,14 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
     private final View.OnLayoutChangeListener mStackScrollLayoutChangeListener =
             (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom)
                     -> updatePanelTranslation();
+    private final ViewClippingUtil.ClippingParameters mParentClippingParams =
+            new ViewClippingUtil.ClippingParameters() {
+                @Override
+                public boolean shouldFinish(View view) {
+                    return view.getId() == R.id.status_bar;
+                }
+            };
+    private boolean mAnimationsEnabled = true;
     Point mPoint;
 
     public HeadsUpAppearanceController(
@@ -75,6 +85,7 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
                 statusbarView.findViewById(R.id.heads_up_status_bar_view),
                 statusbarView.findViewById(R.id.notification_stack_scroller),
                 statusbarView.findViewById(R.id.notification_panel),
+                statusbarView.findViewById(R.id.operator_name_frame),
                 new ClockController(statusbarView));
     }
 
@@ -85,6 +96,7 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
             HeadsUpStatusBarView headsUpStatusBarView,
             NotificationStackScrollLayout stackScroller,
             NotificationPanelView panelView,
+            View operatorNameView,
             ClockController clockController) {
         mNotificationIconAreaController = notificationIconAreaController;
         mHeadsUpManager = headsUpManager;
@@ -101,6 +113,7 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
         mStackScroller.addOnLayoutChangeListener(mStackScrollLayoutChangeListener);
         mStackScroller.setHeadsUpAppearanceController(this);
         mClockController = clockController;
+        mOperatorNameView = operatorNameView;
         mDarkIconDispatcher = Dependency.get(DarkIconDispatcher.class);
         mDarkIconDispatcher.addDarkReceiver(this);
 
@@ -231,23 +244,85 @@ public class HeadsUpAppearanceController implements OnHeadsUpChangedListener,
             boolean isRightClock = clockView.getId() == R.id.clock_right;
             mShown = isShown;
             if (isShown) {
+                updateParentClipping(false /* shouldClip */);
                 mHeadsUpStatusBarView.setVisibility(View.VISIBLE);
-                CrossFadeHelper.fadeIn(mHeadsUpStatusBarView, CONTENT_FADE_DURATION /* duration */,
-                        CONTENT_FADE_DELAY /* delay */);
+                show(mHeadsUpStatusBarView);
                 if (!isRightClock) {
-                    CrossFadeHelper.fadeOut(clockView, CONTENT_FADE_DURATION/* duration */,
-                            0 /* delay */, () -> clockView.setVisibility(View.INVISIBLE));
+                    hide(clockView, View.INVISIBLE);
+                }
+                if (mOperatorNameView != null) {
+                    hide(mOperatorNameView, View.INVISIBLE);
                 }
             } else {
                 if (!isRightClock) {
-                    CrossFadeHelper.fadeIn(clockView, CONTENT_FADE_DURATION /* duration */,
-                            CONTENT_FADE_DELAY /* delay */);
+                    show(clockView);
                 }
-                CrossFadeHelper.fadeOut(mHeadsUpStatusBarView, CONTENT_FADE_DURATION/* duration */,
-                        0 /* delay */, () -> mHeadsUpStatusBarView.setVisibility(View.GONE));
-
+                if (mOperatorNameView != null) {
+                    show(mOperatorNameView);
+                }
+                hide(mHeadsUpStatusBarView, View.GONE, () -> {
+                    updateParentClipping(true /* shouldClip */);
+                });
             }
         }
+    }
+
+    private void updateParentClipping(boolean shouldClip) {
+        ViewClippingUtil.setClippingDeactivated(
+                mHeadsUpStatusBarView, !shouldClip, mParentClippingParams);
+    }
+
+    /**
+     * Hides the view and sets the state to endState when finished.
+     *
+     * @param view The view to hide.
+     * @param endState One of {@link View#INVISIBLE} or {@link View#GONE}.
+     * @see HeadsUpAppearanceController#hide(View, int, Runnable)
+     * @see View#setVisibility(int)
+     *
+     */
+    private void hide(View view, int endState) {
+        hide(view, endState, null);
+    }
+
+    /**
+     * Hides the view and sets the state to endState when finished.
+     *
+     * @param view The view to hide.
+     * @param endState One of {@link View#INVISIBLE} or {@link View#GONE}.
+     * @param callback Runnable to be executed after the view has been hidden.
+     * @see View#setVisibility(int)
+     *
+     */
+    private void hide(View view, int endState, Runnable callback) {
+        if (mAnimationsEnabled) {
+            CrossFadeHelper.fadeOut(view, CONTENT_FADE_DURATION /* duration */,
+                    0 /* delay */, () -> {
+                        view.setVisibility(endState);
+                        if (callback != null) {
+                            callback.run();
+                        }
+                    });
+        } else {
+            view.setVisibility(endState);
+            if (callback != null) {
+                callback.run();
+            }
+        }
+    }
+
+    private void show(View view) {
+        if (mAnimationsEnabled) {
+            CrossFadeHelper.fadeIn(view, CONTENT_FADE_DURATION /* duration */,
+                    CONTENT_FADE_DELAY /* delay */);
+        } else {
+            view.setVisibility(View.VISIBLE);
+        }
+    }
+
+    @VisibleForTesting
+    void setAnimationsEnabled(boolean enabled) {
+        mAnimationsEnabled = enabled;
     }
 
     @VisibleForTesting
